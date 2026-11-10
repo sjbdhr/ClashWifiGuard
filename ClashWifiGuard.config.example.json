@@ -1,0 +1,19 @@
+{
+  "Regions": [
+    "台湾",
+    "美国",
+    "新加坡"
+  ],
+  "Tolerance": 120,
+  "Interval": 90,
+  "ConfirmRounds": 2,
+  "Group": "AI",
+  "TestUrl": "https://chatgpt.com/",
+  "Exclude": "高倍,3x流量",
+  "Samples": 2,
+  "TimeoutMs": 3000,
+  "Ssid": "YOUR_SSID",
+  "WifiInterval": 3,
+  "ClashAutoStart": true,
+  "WifiAutoStart": true
+}
