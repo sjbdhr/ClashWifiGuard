@@ -4,6 +4,8 @@
 
 1. **Clash AI 节点优选** —— 定时测速，按「延迟 + 连通性」在台湾 / 美国 / 新加坡的单倍节点之间自动切换，带防抖，不会来回乱跳。
 2. **WiFi 掉线自动重连** —— 发现目标 SSID 掉线就自动执行 `netsh wlan connect` 重连。
+3. **延迟趋势折线** —— 每个节点一条曲线，看节点什么时候开始劣化；失败的点压成红色断点，切换时刻标黄虚线。
+4. **常驻托盘** —— 关窗口只是收起，节点监控和 WiFi 重连照常跑；右键托盘图标选「退出」才真正结束。
 
 零依赖：Windows 自带 PowerShell 5.1 + WPF，不需要 Python、不需要 .NET SDK、不需要安装任何东西。
 
@@ -22,6 +24,9 @@
 2. 把 `ClashWifiGuard.config.example.json` 复制一份改名为 `ClashWifiGuard.config.json`，把 `Ssid` 改成本机的 WiFi 名称
 3. 双击 `启动网络守护台.vbs`
 4. 窗口出现后两个引擎自动开始运行，日志里会看到 `Clash 引擎就绪` / `WiFi 引擎就绪`
+5. 点标题栏的 ✕ 只是收起窗口，程序留在托盘里继续工作；要彻底关闭请右键托盘图标选「退出」
+
+> Windows 11 默认把新出现的托盘图标收进 `^` 溢出区。想让它常驻右下角：设置 → 个性化 → 任务栏 → 「其他系统托盘图标」，把「网络守护台」打开。
 
 ## 文件说明
 
@@ -35,6 +40,7 @@
 | `app-icon.png` | 图标母版，仅备查 | 否 |
 | `ClashWifiGuard.config.example.json` | 配置模板 | 是 |
 | `ClashWifiGuard.config.json` | 实际配置，首次保存时生成（已 gitignore） | 否 |
+| `ClashWifiGuard.history.jsonl` | 延迟趋势采样，每轮追加一行（已 gitignore） | 否 |
 | `取消开机自启.bat` | 移除开机自启项 | 否 |
 
 ## 配置字段
@@ -46,7 +52,7 @@
 | `Interval` | 90 | 轮询间隔（秒） |
 | `ConfirmRounds` | 2 | 连续几轮复核通过才真正切换 |
 | `Group` | AI | 要调整的 Clash 策略组名 |
-| `TestUrl` | https://chatgpt.com/ | 测速用的 URL |
+| `TestUrls` | `api.openai.com/v1/models` + `chatgpt.com` | 探测目标数组。每个节点在每个目标上分别测速，取**最慢**的作为节点延迟 |
 | `Exclude` | 高倍,3x流量 | 排除关键词，逗号分隔 |
 | `Samples` / `TimeoutMs` | 2 / 3000 | 单节点采样次数 / 单次超时 |
 | `Ssid` | YOUR_SSID | 要守护的 WiFi 名称 |
@@ -75,11 +81,17 @@ sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -F
 ## 实现要点
 
 - **两个引擎各跑一个 runspace**，主线程只画界面，探测卡住时 UI 不假死
-- **单实例锁**：`Local\ClashWifiGuard.SingleInstance`，重复启动会把已有窗口提到前台而不是再开一个进程
+- **多目标测速**：`codex` 实际走 `api.openai.com` 而不是网页，只测 `chatgpt.com` 会选出「网页快但 API 慢」的节点。现在每个节点在全部目标上分别测速（每目标取最好样本），再把各目标里的**最大值**作为该节点延迟 —— 用最慢的目标代表真实体验；某目标整体失败按 2000ms 惩罚计入，全部目标都失败才算不可达。日志里每个节点后面跟 `[api.openai=342 chatgpt=285]` 这样的明细
+- **关窗不退出必须靠 Application.Run**：`ShowDialog()` 的模态循环在窗口 `Hide()` 之后会返回，脚本一路跑到末尾进程就没了 —— 看上去像收进了托盘，其实已经退出。改用 `Application.Run` + `ShutdownMode=OnExplicitShutdown`，只有托盘菜单里的「退出」才会显式 `Shutdown()`
+- **Closing 里不能同步 Hide**：在 `Closing` 里 `Cancel = true` 之后直接 `Hide()`，窗口会被框架重新显示回来；要用 `Dispatcher.BeginInvoke` 把隐藏推迟到事件结束之后
+- **单实例锁**：`Local\ClashWifiGuard.SingleInstance`，重复启动会把已有窗口提到前台而不是再开一个进程。窗口收起后 `IsWindowVisible` 为假，所以激活逻辑不能再按可见性过滤，否则找不到收起的窗口、用户会以为启动没反应
 - **AppUserModelID**：`ClashWifiGuard.Desktop`，否则任务栏会沿用 powershell.exe 的分组和图标
 - **mihomo 走命名管道**：`external-controller` 为空时只能读 `\\.\pipe\` 找 `MihomoParty` + `mihomo-user-Console`，管道名末段随 PID 变化，一律动态发现
 - **chunked 响应必须字节层面解包**：按字符下标切 body 会因为中文节点名的字节数与字符数不等而错位
 - **防抖**：候选要比当前快超过 `Tolerance` 毫秒、且连续 `ConfirmRounds` 轮复核都通过才切；当前节点不可达时立即切
+- **延迟趋势用 ConcurrentQueue 跨 runspace**：引擎每轮 `Enqueue` 样本，界面只 `ToArray()` 取快照画图，不共享可变集合，也不加锁。容量上限 4200 条（约 1400 轮），超出自动出队。采样同时追加到 `ClashWifiGuard.history.jsonl`，启动时读尾部 1200 行，所以重启后曲线还在
+- **嵌套滚动容器会吞滚轮**：WPF 里内层的 `ScrollViewer` / `TextBox` 即使内容不满也照样吃掉 `MouseWheel`，鼠标停在「节点延迟」列表或日志框上时整页就滚不动。处理方式是在内层挂 `PreviewMouseWheel`，判断「内层滚不了」或「已滚到顶/底」时手动驱动外层 `MainScroll`，并把事件标记为已处理
+- **折线图是纯 WPF 自绘**：Canvas + `Polyline` / `Line` / `Ellipse`，没有第三方图表库。窗口只有 180 分钟的时间窗（`$script:trendWindowMin`），Y 轴上界按峰值自动取整；失败样本断线并在底部压红点，切换事件画黄色竖虚线；延迟相近的节点端点画成空心环，否则会互相盖住看不出是两个
 
 ## 开发期自检
 
