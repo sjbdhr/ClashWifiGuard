@@ -92,6 +92,12 @@ sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -F
 - **延迟趋势用 ConcurrentQueue 跨 runspace**：引擎每轮 `Enqueue` 样本，界面只 `ToArray()` 取快照画图，不共享可变集合，也不加锁。容量上限 4200 条（约 1400 轮），超出自动出队。采样同时追加到 `ClashWifiGuard.history.jsonl`，启动时读尾部 1200 行，所以重启后曲线还在
 - **嵌套滚动容器会吞滚轮**：WPF 里内层的 `ScrollViewer` / `TextBox` 即使内容不满也照样吃掉 `MouseWheel`，鼠标停在「节点延迟」列表或日志框上时整页就滚不动。处理方式是在内层挂 `PreviewMouseWheel`，判断「内层滚不了」或「已滚到顶/底」时手动驱动外层 `MainScroll`，并把事件标记为已处理
 - **折线图是纯 WPF 自绘**：Canvas + `Polyline` / `Line` / `Ellipse`，没有第三方图表库。窗口只有 180 分钟的时间窗（`$script:trendWindowMin`），Y 轴上界按峰值自动取整；失败样本断线并在底部压红点，切换事件画黄色竖虚线；延迟相近的节点端点画成空心环，否则会互相盖住看不出是两个
+- **托盘菜单不能靠 ContextMenuStrip 做大圆角**：WinForms 的菜单只能是方形卡片 + 系统阴影，用 `Region` 硬裁圆角还会有锯齿。这里改成起一个 `WindowStyle=None` + `AllowsTransparency=true` + `SizeToContent=WidthAndHeight` 的透明窗口当菜单，首帧 `Opacity=0`、定位完再置 1，避免左上角闪一下；`Deactivated` 负责点外部收起，`Esc` 也能关
+- **提示浮层不要用 `ShowBalloonTip`**：Win11 下它已经不走传统气泡而是进通知中心，标题栏显示的是**进程身份**而不是代码传进去的字符串，中文就成了乱码方块。改为自绘 WPF 浮层（`ShowActivated=false` + `Topmost` + 定时自动关闭 + 180ms 淡入）
+- **浮层定位不能拿主窗口当基准**：窗口一旦被拖动或没铺满屏幕，按 `$window.Left + ActualWidth` 算出来的位置就跑到屏幕中间去了。要以所在屏幕的工作区右下角为基准
+- **`Screen.WorkingArea` 在这个进程里被 DPI 虚拟化过一遍**：150% 缩放下实测返回 `3840×2088`，而真实物理只有 `2560×1392`；WPF 的 `Left/Top` 单位是 DIP，所以折回去要除以 `scale` **两次**（`scale²`），只除一次会算到屏幕右边界之外——表现就是提示窗口存在、但永远看不见。核对办法：枚举窗口取 `GetWindowRect`，看浮层的实际物理坐标是否落在屏内
+- **`DropShadowEffect` 的位移属性叫 `ShadowDepth`**：误写成 `ShiftDepth` 会抛异常，而这段代码外层套着 `catch {}`，结果就是提示永远不弹、却一点报错都没有。凡是这种"静默无效果"的写法，`catch` 里至少要落一行日志
+- **`New-Object` 的括号写法不合法**：`New-Object System.Windows.Forms.Padding(14,8,30,8)` 会被解析成类型名的一部分，必须写成 `-ArgumentList 14,8,30,8`
 
 ## 开发期自检
 
@@ -99,7 +105,7 @@ sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -F
 powershell -NoProfile -ExecutionPolicy Bypass -File ClashWifiGuard.ps1 -SelfTest
 ```
 
-只解析界面不弹窗，输出 `SelfTest OK: XAML 解析成功，控件全部就位` 表示文件完整可运行。另有 `-AutoProbe`：启动即做一次只测不切的探测。
+只解析界面不弹窗，输出 `SelfTest OK: XAML 解析成功，控件全部就位` 表示文件完整可运行。另有 `-AutoProbe`：启动即做一次只测不切的探测；`-ToastTest`：启动后自动弹一次托盘提示（停留 9 秒），用来核对浮层是不是落在屏幕右下角。
 
 ## 已知限制
 

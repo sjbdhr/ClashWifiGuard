@@ -1725,7 +1725,6 @@ if ($script:Cfg.WifiAutoStart) {
 # 双击图标 = 呼出窗口；右键 = 打开主界面 / 立即检测 / 退出。
 Add-Type -AssemblyName System.Windows.Forms
 
-$script:TrayMenu = $null
 $script:TrayHinted = $false
 $script:ReallyExit = $false
 
@@ -1856,6 +1855,12 @@ function Show-GuardTrayMenu {
         $w.Activate()
 
         $script:TrayMenuWin = $w
+        $w.Add_KeyDown({
+            param($s, $e)
+            if ($e.Key -eq [System.Windows.Input.Key]::Escape) {
+                try { if ($script:TrayMenuWin) { $script:TrayMenuWin.Close(); $script:TrayMenuWin = $null } } catch { }
+            }
+        })
         # 点到菜单外面就收起，行为对齐系统菜单
         $w.Add_Deactivated({
             try {
@@ -1947,6 +1952,13 @@ function Show-GuardToast {
             $toast.Left = $window.Left + $aw - $tw - 24
             $toast.Top = $window.Top + $ah - $th - 30
         }
+
+        # 淡入 180ms，整块深色突然弹出会有点生硬
+        $fade = New-Object System.Windows.Media.Animation.DoubleAnimation
+        $fade.From = 0.0
+        $fade.To = 1.0
+        $fade.Duration = New-Object System.Windows.Duration ([TimeSpan]::FromMilliseconds(180))
+        $toast.BeginAnimation([System.Windows.Window]::OpacityProperty, $fade)
 
         $script:ToastWin = $toast
         if ($ToastTest) {
