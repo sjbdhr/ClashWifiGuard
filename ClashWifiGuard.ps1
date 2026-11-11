@@ -1001,8 +1001,8 @@ $xaml = @'
               <TextBlock x:Name="TxtWatchdog" Text="检测中…" Foreground="#66707F" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center"/>
               <Button x:Name="BtnWatchdog" Style="{StaticResource Ghost}" Content="部署看门狗" Padding="12,3" FontSize="12.5" Height="28" Margin="14,0,0,0"/>
             </StackPanel>
-            <TextBlock Text="部署后由 Windows 计划任务每 5 分钟查一次：程序不在了就自动拉起，平时不占进程。托盘「退出」会留下停机标记，看门狗不会违背你的意思；换了目录重新点一次即可。"
-                       Foreground="#5A6577" FontSize="12" Margin="0,12,0,0" TextWrapping="Wrap"/>
+            <TextBlock Text="部署后程序意外中止会自动拉起。"
+                       Foreground="#5A6577" FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"/>
           </StackPanel>
         </Border>
 
@@ -2184,6 +2184,47 @@ try {
         } catch { }
     })
 
+    # ---- 工作集裁剪 -----------------------------------------------------------
+    # 实测：裸 PowerShell 5.1 + WPF 空窗口的私有提交就有 210MB，这是技术栈的地板，
+    # 再优化缓存也就省二三十 MB。真正能大幅降下来的是「工作集」——把不活跃页还给系统，
+    # 任务管理器里那一列会从 400MB 掉到几十 MB，系统内存紧张时也真的有页可用。
+    # 注意：私有提交量不变，这不是"少用了内存"，而是"让出了物理页"。
+    $script:TrimReady = $false
+    function Trim-GuardMemory {
+        param([switch]$Force)
+        try {
+            if (-not $script:TrimReady) {
+                Add-Type -Namespace Guard -Name Mem -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern bool SetProcessWorkingSetSize(IntPtr h, IntPtr min, IntPtr max);
+'@
+                $script:TrimReady = $true
+            }
+            $proc = [System.Diagnostics.Process]::GetCurrentProcess()
+            $before = [math]::Round($proc.WorkingSet64 / 1MB, 1)
+            if (-not $Force -and $before -lt 60) { return }
+
+            [void][Guard.Mem]::SetProcessWorkingSetSize($proc.Handle, [IntPtr](-1), [IntPtr](-1))
+            Start-Sleep -Milliseconds 150
+            $after = [math]::Round([System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64 / 1MB, 1)
+            Write-GuardLog "裁剪工作集 ${before}MB → ${after}MB（私有提交 $([math]::Round($proc.PrivateMemorySize64/1MB,1))MB 不变）"
+        } catch { }
+    }
+
+    # 启动 25 秒后先裁一次，让任务管理器从一开始就是小数字
+    $trimOnce = New-Object System.Windows.Threading.DispatcherTimer
+    $trimOnce.Interval = [TimeSpan]::FromSeconds(25)
+    $trimOnce.Add_Tick({
+        $trimOnce.Stop()
+        Trim-GuardMemory -Force
+    })
+    $trimOnce.Start()
+
+    # 之后每 5 分钟一次：涨过 60MB 才动手，避免无意义的反复换页
+    $trimTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $trimTimer.Interval = [TimeSpan]::FromMinutes(5)
+    $trimTimer.Add_Tick({ Trim-GuardMemory })
+    $trimTimer.Start()
+
     # 每 60 秒一行心跳，能看出进程在哪一刻停止呼吸、停之前内存多大
     $hb = New-Object System.Windows.Threading.DispatcherTimer
     $hb.Interval = [TimeSpan]::FromSeconds(60)
@@ -2207,6 +2248,9 @@ try {
                 Write-GuardLog "内存超过 500MB ($mem MB)，已强制回收 → $memAfter MB"
                 $mem = $memAfter
             }
+
+            # 回收完顺手把空出来的页还给系统，不然工作集还会慢慢涨回去
+            if ($mem -gt 300) { Trim-GuardMemory }
 
             Write-GuardLog "心跳 内存=${mem}MB 采样=${hcount}条 Clash=$cs WiFi=$ws 窗口=$wv"
 
