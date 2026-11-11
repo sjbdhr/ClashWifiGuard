@@ -4,6 +4,7 @@ ClashWifiGuard.config.json
 # 运行产物
 *.log
 *.jsonl
+ClashWifiGuard.stop
 
 # 系统杂项
 Thumbs.db

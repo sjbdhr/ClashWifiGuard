@@ -41,6 +41,7 @@
 | `ClashWifiGuard.history.jsonl` | 延迟趋势采样，每轮追加一行（已 gitignore） | 否 |
 | `取消开机自启.bat` | 移除开机自启项 | 否 |
 | `看护进程.vbs` | 计划任务用的自愈检查：进程不在就跑起来 | 否 |
+| `ClashWifiGuard.stop` | 用户点了「退出」后留下的停机标记，看门狗看到就放手（已 gitignore） | 否 |
 | `ClashWifiGuard.log` | 运行日志：启动、心跳、异常、退出（已 gitignore） | 否 |
 
 ## 配置字段
@@ -89,7 +90,9 @@ schtasks /create /tn "ClashWifiGuard Watchdog" ^
   /tr "wscript.exe \"<本仓库路径>\看护进程.vbs\"" /sc minute /mo 5 /f
 ```
 
-它用 WMI 查进程列表，**只有确认没有 `ClashWifiGuard.ps1` 在跑才启动新的**，所以不会叠出多个实例；两次检查之间不留下任何常驻进程。手动双击 `看护进程.vbs` 行为等价。
+它用 WMI 查进程列表，**只有确认没有 `ClashWifiGuard.ps1` 在跑才启动新的**，所以不会叠出多个实例；两次检查之间不留下任何常驻进程（每次唤醒执行约 5 毫秒就退出）。手动双击 `看护进程.vbs` 行为等价。
+
+**它尊重你的「退出」**：托盘菜单里的「退出（停止监控）」会写一个 `ClashWifiGuard.stop` 标记，看门狗看到标记就直接放手，不会几分钟后又把程序拉起来；下次双击启动器时这个标记会被自动清除，兜底重新生效。
 
 不想要了：
 

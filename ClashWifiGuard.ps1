@@ -1731,6 +1731,7 @@ Add-Type -AssemblyName System.Windows.Forms
 # 却拿不到任何线索。所以启动、心跳、异常、退出都落一行到文件，
 # 下次再出现同样的消失，能直接区分是崩溃、被系统结束、还是正常退出。
 $script:GuardLogPath = Join-Path $PSScriptRoot 'ClashWifiGuard.log'
+$script:StopFlagPath = Join-Path $PSScriptRoot 'ClashWifiGuard.stop'
 
 function Write-GuardLog {
     param([string]$Text)
@@ -1752,6 +1753,15 @@ try {
 } catch { }
 
 Write-GuardLog "启动 PID=$PID 参数=[$(($PSBoundParameters.Keys) -join ',')]"
+
+# 能走到这里就说明是"有人主动启动"，清掉上一次留下的退出标记，
+# 让看门狗重新接手兜底（否则退过一次之后它永远不再管这个进程）
+try {
+    if (Test-Path -LiteralPath $script:StopFlagPath) {
+        Remove-Item -LiteralPath $script:StopFlagPath -Force
+        Write-GuardLog "清除退出标记，看门狗恢复兜底"
+    }
+} catch { }
 
 $script:TrayHinted = $false
 $script:ReallyExit = $false
@@ -2023,6 +2033,9 @@ function Show-GuardToast {
 
 function Exit-Guard {
     Write-GuardLog "用户从托盘选择退出，开始停止引擎"
+    # 落一个停机标记：看门狗看到它就放手。否则点完「退出」五分钟后又自己冒出来，
+    # 等于用户根本退不掉这个程序。下次主动启动（双击启动器）时标记会被清掉。
+    try { [IO.File]::WriteAllText($script:StopFlagPath, (Get-Date).ToString('s')) } catch { }
     $script:ReallyExit = $true
     try { $sync.Shutdown = $true; $sync.Running = $false; $sync.WifiRunning = $false } catch { }
     try {

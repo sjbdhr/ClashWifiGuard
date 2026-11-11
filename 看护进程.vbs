@@ -1,16 +1,23 @@
 ' ClashWifiGuard watchdog.
 ' Called by a scheduled task every few minutes. Starts the app only when no
-' instance is running, so a crashed / manually closed process comes back on its
-' own. Uses WMI to inspect the process list, so nothing stays resident between runs.
+' instance is running AND the user has not asked it to stay down.
+' Uses WMI to inspect the process list, so nothing stays resident between runs.
 
-Dim wmi, procs, p, found, sh, fso, appDir, ps1, cmd
+Dim wmi, procs, p, found, sh, fso, appDir, ps1, stopFlag, cmd
 
 Set fso = CreateObject("Scripting.FileSystemObject")
 appDir = fso.GetParentFolderName(WScript.ScriptFullName)
 ps1 = appDir & "\ClashWifiGuard.ps1"
+stopFlag = appDir & "\ClashWifiGuard.stop"
 
 If Not fso.FileExists(ps1) Then
     WScript.Quit 1
+End If
+
+' "退出（停止监控）" writes this file. Respect it: a watchdog that restarts the
+' app after the user explicitly quit it makes the app impossible to turn off.
+If fso.FileExists(stopFlag) Then
+    WScript.Quit 0
 End If
 
 found = False
