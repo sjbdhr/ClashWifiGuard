@@ -992,6 +992,20 @@ $xaml = @'
           </StackPanel>
         </Border>
 
+        <!-- 进程自愈 -->
+        <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+          <StackPanel>
+            <StackPanel Orientation="Horizontal">
+              <Border Width="3" Height="16" CornerRadius="2" Background="#34D399" VerticalAlignment="Center"/>
+              <TextBlock Text="进程自愈" Foreground="#E9EDF5" FontSize="14.5" FontWeight="SemiBold" Margin="9,0,0,0" VerticalAlignment="Center"/>
+              <TextBlock x:Name="TxtWatchdog" Text="检测中…" Foreground="#66707F" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center"/>
+              <Button x:Name="BtnWatchdog" Style="{StaticResource Ghost}" Content="部署看门狗" Padding="12,3" FontSize="12.5" Height="28" Margin="14,0,0,0"/>
+            </StackPanel>
+            <TextBlock Text="部署后由 Windows 计划任务每 5 分钟查一次：程序不在了就自动拉起，平时不占进程。托盘「退出」会留下停机标记，看门狗不会违背你的意思；换了目录重新点一次即可。"
+                       Foreground="#5A6577" FontSize="12" Margin="0,12,0,0" TextWrapping="Wrap"/>
+          </StackPanel>
+        </Border>
+
         <!-- 日志 -->
         <Border Style="{StaticResource Card}">
           <StackPanel>
@@ -1027,7 +1041,7 @@ foreach ($name in @('TitleBar','BtnMin','BtnMax','BtnClose','ImgLogo','TxtNode',
                    'TxtClashState','ChkTW','ChkUS','ChkSG','TxtTolerance','TxtInterval','TxtConfirm',
                    'TxtTestUrl','TxtExclude','BtnClashToggle','BtnProbe','ChkDryRun','BtnSave','ChkClashAuto','PnlNodes',
                    'TxtWifiState','TxtSsid','TxtWifiInterval','BtnWifiToggle','ChkWifiAuto','BtnClearLog','TxtLog',
-                   'CvTrend','PnlLegend','TxtTrendInfo','MainScroll','SvNodes')) {
+                   'CvTrend','PnlLegend','TxtTrendInfo','MainScroll','SvNodes','TxtWatchdog','BtnWatchdog')) {
     $ui[$name] = $window.FindName($name)
 }
 
@@ -1309,6 +1323,67 @@ $ui['BtnClearLog'].Add_Click({
     $ui['TxtLog'].Text = ''
     $script:logShown = 0
 })
+
+# ---- 看门狗部署 -------------------------------------------------------------
+# 计划任务和开机自启都存在系统目录里（C:\Windows\System32\Tasks\ 和 AppData\...\Startup\），
+# 并且写死了绝对路径，所以换目录之后必须重新注册一次。这个按钮就是给这件事一个入口。
+function Update-WatchdogUi {
+    try {
+        $name = 'ClashWifiGuard Watchdog'
+        $t = Get-ScheduledTask -TaskName $name -ErrorAction Stop
+        $info = Get-ScheduledTaskInfo -TaskName $name -ErrorAction SilentlyContinue
+
+        $stateMap = @{ 'Ready' = '就绪'; 'Running' = '运行中'; 'Disabled' = '已禁用'; 'Queued' = '排队中' }
+        $st = $stateMap[[string]$t.State]
+        if (-not $st) { $st = [string]$t.State }
+
+        # NextRunTime 对刚注册/从未跑过的任务会是 1999 年的占位值，别直接显示
+        $next = ''
+        if ($info -and $info.NextRunTime) {
+            $nr = [datetime]$info.NextRunTime
+            if ($nr.Year -ge 2020) { $next = ' · 下次 ' + $nr.ToString('HH:mm') }
+        }
+
+        if ([string]$t.State -eq 'Disabled') {
+            $ui['TxtWatchdog'].Text = "已注册但被禁用$next"
+            $ui['TxtWatchdog'].Foreground = '#FBBF24'
+            $ui['BtnWatchdog'].Content = '启用 / 重新部署'
+        } else {
+            $ui['TxtWatchdog'].Text = "已部署 · $st$next"
+            $ui['TxtWatchdog'].Foreground = '#34D399'
+            $ui['BtnWatchdog'].Content = '重新部署'
+        }
+    } catch {
+        $ui['TxtWatchdog'].Text = '未部署 · 程序退出后不会自动回来'
+        $ui['TxtWatchdog'].Foreground = '#FBBF24'
+        $ui['BtnWatchdog'].Content = '部署看门狗'
+    }
+}
+
+$ui['BtnWatchdog'].Add_Click({
+    try {
+        $ui['TxtWatchdog'].Text = '部署中…'
+        $ui['TxtWatchdog'].Foreground = '#7C8799'
+        $reg = Join-Path $script:AppDir 'Register-Tasks.ps1'
+        if (-not (Test-Path -LiteralPath $reg)) { throw '缺少 Register-Tasks.ps1，无法部署' }
+        # 复用同一个注册脚本，避免这里和 bat 两条实现慢慢跑偏
+        $p = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$reg) -WindowStyle Hidden -Wait -PassThru
+        Update-WatchdogUi
+        if ($p.ExitCode -eq 0) {
+            Write-GuardLog '已通过界面部署看门狗'
+            Show-GuardToast '进程自愈' '看门狗已部署：每 5 分钟检查一次，程序不在就自动拉起'
+        } else {
+            Write-GuardLog "部署看门狗失败，返回码 $($p.ExitCode)"
+            Show-GuardToast '部署失败' "注册脚本返回码 $($p.ExitCode)，可双击 注册本机任务.bat 看详细输出"
+        }
+    } catch {
+        Write-GuardLog "部署看门狗异常: $($_.Exception.Message)"
+        Update-WatchdogUi
+        Show-GuardToast '部署失败' $_.Exception.Message
+    }
+})
+
+Update-WatchdogUi
 
 # ---- 界面刷新 -------------------------------------------------------------
 $script:logShown = 0
@@ -2134,6 +2209,9 @@ try {
             }
 
             Write-GuardLog "心跳 内存=${mem}MB 采样=${hcount}条 Clash=$cs WiFi=$ws 窗口=$wv"
+
+            # 顺手刷新看门狗状态：刚部署完、或被系统禁用，界面上的时间和状态都要跟上
+            try { Update-WatchdogUi } catch { }
         } catch { }
     })
     $hb.Start()
