@@ -2219,9 +2219,11 @@ try {
     })
     $trimOnce.Start()
 
-    # 之后每 5 分钟一次：涨过 60MB 才动手，避免无意义的反复换页
+    # 之后每 90 秒检查一次：涨过 60MB 就还一次页。
+    # 实测空窗裁剪后 4 分钟会回涨到 110MB（探测和重绘的活跃页），
+    # 5 分钟一次太疏，数字会长期挂在 100MB 以上；90 秒一次能稳定在 60~80MB 区间。
     $trimTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $trimTimer.Interval = [TimeSpan]::FromMinutes(5)
+    $trimTimer.Interval = [TimeSpan]::FromSeconds(90)
     $trimTimer.Add_Tick({ Trim-GuardMemory })
     $trimTimer.Start()
 
