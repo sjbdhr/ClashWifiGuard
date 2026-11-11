@@ -158,7 +158,7 @@ function Log {
     param([string]$Msg, [string]$Level = 'info')
     $item = [pscustomobject]@{ Time = (Get-Date).ToString('HH:mm:ss'); Msg = $Msg; Level = $Level }
     [void]$Sync.ClashLog.Add($item)
-    while ($Sync.ClashLog.Count -gt 600) { $Sync.ClashLog.RemoveAt(0) }
+    while ($Sync.ClashLog.Count -gt 400) { $Sync.ClashLog.RemoveAt(0) }
 }
 
 function Get-PipeName {
@@ -393,7 +393,8 @@ function Invoke-Round {
         $recs.Add($rec)
         $Sync.History.Enqueue($rec)
     }
-    $overflow = $Sync.History.Count - 4200
+    # 2400 条足够 180 分钟窗口（每轮 3 条 × 120 轮），再多的老数据只会白占内存
+    $overflow = $Sync.History.Count - 2400
     for ($i = 0; $i -lt $overflow; $i++) {
         $drop = $null
         [void]$Sync.History.TryDequeue([ref]$drop)
@@ -547,7 +548,7 @@ function Log {
     param([string]$Msg, [string]$Level = 'info')
     $item = [pscustomobject]@{ Time = (Get-Date).ToString('HH:mm:ss'); Msg = $Msg; Level = $Level }
     [void]$Sync.WifiLog.Add($item)
-    while ($Sync.WifiLog.Count -gt 300) { $Sync.WifiLog.RemoveAt(0) }
+    while ($Sync.WifiLog.Count -gt 200) { $Sync.WifiLog.RemoveAt(0) }
 }
 
 function Get-WifiText {
@@ -2100,12 +2101,25 @@ try {
     $hb.Interval = [TimeSpan]::FromSeconds(60)
     $hb.Add_Tick({
         try {
-            $mem = [math]::Round(([System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64) / 1MB, 1)
+            $proc = [System.Diagnostics.Process]::GetCurrentProcess()
+            $mem = [math]::Round($proc.WorkingSet64 / 1MB, 1)
             $hcount = 0
             try { $hcount = $sync.History.Count } catch { }
             $cs = if ($sync.Running) { 'on' } else { 'off' }
             $ws = if ($sync.WifiRunning) { 'on' } else { 'off' }
             $wv = if ($window.WindowState -eq [System.Windows.WindowState]::Minimized -or -not $window.IsVisible) { 'hidden' } else { 'shown' }
+
+            # PowerShell 5.1 的 runspace 会把每轮探测的临时对象压在堆里等下代回收，
+            # 长期驻留后工作集只涨不落。超过 500MB 就主动催一次回收，避免一路涨到被系统掐掉。
+            if ($mem -gt 500) {
+                [GC]::Collect()
+                [GC]::WaitForPendingFinalizers()
+                [GC]::Collect()
+                $memAfter = [math]::Round($proc.WorkingSet64 / 1MB, 1)
+                Write-GuardLog "内存超过 500MB ($mem MB)，已强制回收 → $memAfter MB"
+                $mem = $memAfter
+            }
+
             Write-GuardLog "心跳 内存=${mem}MB 采样=${hcount}条 Clash=$cs WiFi=$ws 窗口=$wv"
         } catch { }
     })

@@ -40,6 +40,8 @@
 | `ClashWifiGuard.config.json` | 实际配置，首次保存时生成（已 gitignore） | 否 |
 | `ClashWifiGuard.history.jsonl` | 延迟趋势采样，每轮追加一行（已 gitignore） | 否 |
 | `取消开机自启.bat` | 移除开机自启项 | 否 |
+| `看护进程.vbs` | 计划任务用的自愈检查：进程不在就跑起来 | 否 |
+| `ClashWifiGuard.log` | 运行日志：启动、心跳、异常、退出（已 gitignore） | 否 |
 
 ## 配置字段
 
@@ -75,6 +77,35 @@ sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -F
 ```
 
 延迟 30 秒是为了等 Clash Party 先起来，否则第一轮探测连不上控制管道。
+
+## 进程自愈（崩了自己回来）
+
+常驻托盘的代价是：它一旦自己退出，你不会收到任何提示，只是过一阵发现节点不切了、WiFi 不重连了。开机自启只在登录时跑一次，压不住这种情况。
+
+所以另挂一个计划任务，每 5 分钟跑一次 `看护进程.vbs`：
+
+```
+schtasks /create /tn "ClashWifiGuard Watchdog" ^
+  /tr "wscript.exe \"<本仓库路径>\看护进程.vbs\"" /sc minute /mo 5 /f
+```
+
+它用 WMI 查进程列表，**只有确认没有 `ClashWifiGuard.ps1` 在跑才启动新的**，所以不会叠出多个实例；两次检查之间不留下任何常驻进程。手动双击 `看护进程.vbs` 行为等价。
+
+不想要了：
+
+```
+schtasks /delete /tn "ClashWifiGuard Watchdog" /f
+```
+
+## 关于内存
+
+基线约 360MB，这是 **Windows PowerShell 5.1 宿主 + WPF + 两个 runspace** 的固有开销，不是内存泄漏。能控制的部分都设了上限：
+
+- 趋势缓冲 2400 条（180 分钟窗口够用，之前是 4200）
+- Clash 日志 400 条、WiFi 日志 200 条（之前 600 / 300）
+- 每 60 秒心跳检查工作集，超过 500MB 主动 `[GC]::Collect()` 并记一行日志
+
+想压到 100MB 以内只能换技术栈（C# 宿主，或把两个引擎合进一个 runspace），对这个工具不值得。真要长期跑，更实用的做法是靠看门狗兜底：出问题就重启，而不是追求内存曲线绝对平坦。
 
 ## 实现要点
 
