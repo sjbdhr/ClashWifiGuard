@@ -1725,6 +1725,33 @@ if ($script:Cfg.WifiAutoStart) {
 # 双击图标 = 呼出窗口；右键 = 打开主界面 / 立即检测 / 退出。
 Add-Type -AssemblyName System.Windows.Forms
 
+# ---- 运行日志 ----------------------------------------------------------------
+# 这个程序是"窗口一关就藏起来"的常驻进程，一旦静默消失，用户只会发现"它自己退了"，
+# 却拿不到任何线索。所以启动、心跳、异常、退出都落一行到文件，
+# 下次再出现同样的消失，能直接区分是崩溃、被系统结束、还是正常退出。
+$script:GuardLogPath = Join-Path $PSScriptRoot 'ClashWifiGuard.log'
+
+function Write-GuardLog {
+    param([string]$Text)
+    try {
+        [IO.File]::AppendAllText(
+            $script:GuardLogPath,
+            '[' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + '] ' + $Text + "`r`n",
+            (New-Object Text.UTF8Encoding $false))
+    } catch { }
+}
+
+# 日志超过 512KB 就滚一份，常驻进程不能把日志撑成几十兆
+try {
+    if (Test-Path -LiteralPath $script:GuardLogPath) {
+        if ((Get-Item -LiteralPath $script:GuardLogPath).Length -gt 524288) {
+            Move-Item -LiteralPath $script:GuardLogPath -Destination ($script:GuardLogPath + '.1') -Force
+        }
+    }
+} catch { }
+
+Write-GuardLog "启动 PID=$PID 参数=[$(($PSBoundParameters.Keys) -join ',')]"
+
 $script:TrayHinted = $false
 $script:ReallyExit = $false
 
@@ -1994,6 +2021,7 @@ function Show-GuardToast {
 }
 
 function Exit-Guard {
+    Write-GuardLog "用户从托盘选择退出，开始停止引擎"
     $script:ReallyExit = $true
     try { $sync.Shutdown = $true; $sync.Running = $false; $sync.WifiRunning = $false } catch { }
     try {
@@ -2058,6 +2086,31 @@ try {
     $script:App = New-Object System.Windows.Application
     $script:App.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
 
+    # UI 线程兜底：异常记下来并继续跑，不让它把常驻进程悄悄带走
+    $script:App.Add_DispatcherUnhandledException({
+        param($s, $e)
+        try {
+            Write-GuardLog "UI 线程异常: $($e.Exception.Message) @ $($e.Exception.StackTrace)"
+            $e.Handled = $true
+        } catch { }
+    })
+
+    # 每 60 秒一行心跳，能看出进程在哪一刻停止呼吸、停之前内存多大
+    $hb = New-Object System.Windows.Threading.DispatcherTimer
+    $hb.Interval = [TimeSpan]::FromSeconds(60)
+    $hb.Add_Tick({
+        try {
+            $mem = [math]::Round(([System.Diagnostics.Process]::GetCurrentProcess().WorkingSet64) / 1MB, 1)
+            $hcount = 0
+            try { $hcount = $sync.History.Count } catch { }
+            $cs = if ($sync.Running) { 'on' } else { 'off' }
+            $ws = if ($sync.WifiRunning) { 'on' } else { 'off' }
+            $wv = if ($window.WindowState -eq [System.Windows.WindowState]::Minimized -or -not $window.IsVisible) { 'hidden' } else { 'shown' }
+            Write-GuardLog "心跳 内存=${mem}MB 采样=${hcount}条 Clash=$cs WiFi=$ws 窗口=$wv"
+        } catch { }
+    })
+    $hb.Start()
+
     # -ToastTest：启动后自动弹一次提示（停留久一点），用来核对右下角定位是否准确
     if ($ToastTest) {
         [void]$window.Dispatcher.BeginInvoke(
@@ -2073,7 +2126,9 @@ try {
 }
 
 # 收尾
+Write-GuardLog "窗口已关闭，进入收尾流程"
 $sync.Shutdown = $true
 Start-Sleep -Milliseconds 300
 try { if ($script:ClashPS) { $script:ClashPS.Stop() } } catch { }
 try { if ($script:WifiPS) { $script:WifiPS.Stop() } } catch { }
+Write-GuardLog "进程正常退出"
