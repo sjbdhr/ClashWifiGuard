@@ -40,6 +40,8 @@
 | `ClashWifiGuard.config.json` | 实际配置，首次保存时生成（已 gitignore） | 否 |
 | `ClashWifiGuard.history.jsonl` | 延迟趋势采样，每轮追加一行（已 gitignore） | 否 |
 | `取消开机自启.bat` | 移除开机自启项 | 否 |
+| `注册本机任务.bat` | 一键注册计划任务 + 开机自启（换机器/换目录后必跑） | 否 |
+| `Register-Tasks.ps1` | 上面那个 bat 实际执行的注册脚本 | 否 |
 | `看护进程.vbs` | 计划任务用的自愈检查：进程不在就跑起来 | 否 |
 | `ClashWifiGuard.stop` | 用户点了「退出」后留下的停机标记，看门狗看到就放手（已 gitignore） | 否 |
 | `ClashWifiGuard.log` | 运行日志：启动、心跳、异常、退出（已 gitignore） | 否 |
@@ -78,6 +80,23 @@ sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -F
 ```
 
 延迟 30 秒是为了等 Clash Party 先起来，否则第一轮探测连不上控制管道。
+
+## 换机器 / 换目录
+
+主程序本身不写死任何盘符路径（控制管道靠枚举 `\\.\pipe\` 找、配置读同目录的 json），**整个文件夹拷走就能跑**。但有两样东西不在这个文件夹里：
+
+| 东西 | 存在哪 | 为什么必须重建 |
+|---|---|---|
+| 计划任务 `ClashWifiGuard Watchdog` | `C:\Windows\System32\Tasks\` | 任务定义里写死了看护脚本的绝对路径 |
+| 开机自启 | `%APPDATA%\...\Startup\ClashWifiGuard-autostart.vbs` | 那份 VBS 里写死了主程序的绝对路径 |
+
+所以迁移只有三步：
+
+1. 把整个目录拷到新位置（`ClashWifiGuard.config.json` 可以一起带，省得重填）
+2. 双击 **`注册本机任务.bat`**，它按当前实际目录把上面两样重建一遍（可重复执行，每次覆盖）
+3. 核对 `ClashWifiGuard.config.json` 里的 `Ssid` 是不是新机器要守的 WiFi 名
+
+新机器的 Clash Party 装在别的盘也没关系——程序不依赖它的安装路径。
 
 ## 进程自愈（崩了自己回来）
 
